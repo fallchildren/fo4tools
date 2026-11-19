@@ -10,9 +10,14 @@ library (`struct` + `zlib` + `xml`), no game, no Blender, no external tools.
   delta application.
 * **graph** — hkb behaviour-graph (TagXML) inspection and repair.
 * **ba2** — Bethesda archives, GNRL and DX10, read and write.
-* **esp** — plugin inspection (read-only).
+* **esp** — plugin reading and writing: records, subrecords, object templates
+  (`OBTE`/`OBTS`), plus byte-exact plugin rebuilds.
 * **order** — load-order audit.
 * **animtext / clipinfo / nif** — auxiliary format readers.
+
+**New here?** [USE_CASES.md](USE_CASES.md) walks through real problems — "the
+armour has no mesh", "which plugin wins this record?", "why did my plugin hang
+the load?" — with the commands and their actual output.
 
 ---
 
