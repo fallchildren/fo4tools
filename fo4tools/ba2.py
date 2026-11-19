@@ -60,8 +60,8 @@ def list_names(path):
     f.close()
     return [e["name"] for e in entries]
 
-def extract_file(path, want, out_path):
-    """Extract one file by (substring of) its archive name."""
+def extract_file(path, want, out_dir):
+    """Extract one file by (substring of) its archive name into out_dir."""
     entries, f = read(path)
     for e in entries:
         if want.lower() in (e["name"] or "").lower():
@@ -69,7 +69,9 @@ def extract_file(path, want, out_path):
             data = f.read(e["size"])
             if e["size"] != e["unpacked"]:
                 data = zlib.decompress(data)
-            open(out_path, "wb").write(data)
+            dst = os.path.join(out_dir, e["name"].replace("/", os.sep))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            open(dst, "wb").write(data)
             f.close()
             return e["name"]
     f.close()
