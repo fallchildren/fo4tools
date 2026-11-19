@@ -40,16 +40,18 @@ def read(path):
         h, ext, dh, flags, off, _pad, packed, unpacked = REC.unpack_from(table, i * REC.size)
         entries.append({"hash": h, "ext": ext.rstrip(b"\x00").decode("latin-1"),
                         "offset": off, "size": packed, "unpacked": unpacked, "name": None})
-    start = 24 + name_table_offset
+    start = name_table_offset
     f.seek(start)
-    names = f.read(size - start).split(b"\x00")
-    names = [n for n in names if n]
+    rest = f.read(size - start)
+    names = []
+    p = 0
+    while p + 2 <= len(rest):
+        ln = struct.unpack_from('<H', rest, p)[0]
+        p += 2
+        names.append(rest[p:p + ln].decode('latin1').replace('\\', '/'))
+        p += ln
     for e, n in zip(entries, names):
-        txt = n.decode("latin-1").replace("\\", "/")
-        m = re.search(r"\.(hkx|txt|nif|mat|xml|psc|swf|dds|wav|xwm|fuz)", txt, re.I)
-        if m:
-            txt = txt[:m.end()]
-        e["name"] = txt
+        e["name"] = n
     entries[0]["_f"] = f  # keep the handle for extraction
     return entries, f
 
