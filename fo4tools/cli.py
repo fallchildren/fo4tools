@@ -96,6 +96,32 @@ def main(argv=None):
     ed.add_argument("--type", help="comma list, e.g. ARMO,WEAP")
     ed.add_argument("--search", help="substring of EDID or FULL name")
     ed.add_argument("--fid", help="exact form id, e.g. 01000F99")
+    et = esub.add_parser("template", help="decode object templates (OBTE/OBTS)")
+    et.add_argument("plugin")
+    et.add_argument("--type", help="comma list of record types, e.g. ARMO,ARMA")
+    et.add_argument("--search", help="substring of EDID or FULL name")
+    et.add_argument("--fid", help="exact form id, e.g. 010008F8")
+    ec = esub.add_parser("copy", help="rebuild a plugin byte-for-byte (writer self-check)")
+    ec.add_argument("plugin")
+    ec.add_argument("out")
+    ec.add_argument("--nested", action="store_true",
+                    help="also rebuild nested child groups (WRLD/CELL)")
+    eh = esub.add_parser("header", help="decode a record header at a file offset")
+    eh.add_argument("plugin")
+    eh.add_argument("offset", type=lambda s: int(s, 0))
+    er = esub.add_parser("rec", help="dump every subrecord of one record")
+    er.add_argument("plugin")
+    er.add_argument("fid", help="exact form id, e.g. 010008A1")
+    er.add_argument("--hex", action="store_true", help="print payloads as hex only")
+    er.add_argument("--max", type=int, default=64, help="truncate payloads (default 64)")
+    est = esub.add_parser("set-template", help="rewrite a record's default object template")
+    est.add_argument("plugin")
+    est.add_argument("out")
+    est.add_argument("fid", help="record form id, e.g. 010008B1")
+    est.add_argument("includes", nargs="*",
+                     help="OMOD form ids for the default set (repeatable)")
+    est.add_argument("--drop", action="store_true",
+                     help="remove OBTE/OBTS/STOP entirely instead")
 
     # ---- order ----
     op = sub.add_parser("order", help="load-order audit")
@@ -258,6 +284,154 @@ def dispatch(a):
                 if a.search and a.search.lower() not in (edid + full).lower():
                     continue
                 print("%08X %-6s %-40s %s" % (r.fid, r.type, edid, full))
+        elif a.ecmd == "template":
+            from fo4tools import objecttemplate as OT
+            tmap = {r.fid: r.type for r in recs[1:]}
+            want_types = set(x.strip().upper() for x in (a.type or "").split(",") if x.strip())
+            for r in recs[1:]:
+                if want_types and r.type not in want_types:
+                    continue
+                if a.fid and r.fid != int(a.fid, 16):
+                    continue
+                subs = espread.subrecords(r.data)
+                obte, templates, extra = OT.parse_record(r, subs)
+                if not templates:
+                    continue
+                d = dict(subs)
+                edid = d.get("EDID", b"").rstrip(b"\0").decode("latin1")
+                full = d.get("FULL", b"").rstrip(b"\0").decode("latin1", "replace")
+                if a.search and a.search.lower() not in (edid + full).lower():
+                    continue
+                print("%08X %-6s %-40s %s" % (r.fid, r.type, edid, full))
+                print("    OBTE count=%s  OBTS combinations=%d" % (obte, len(templates)))
+                for i, t in enumerate(templates):
+                    print("      [%d] levels %d..%d addon=%d default=%d"
+                          % (i, t.level_min, t.level_max, t.addon_index, t.default))
+                    if t.keywords:
+                        print("           keywords: %s" % ", ".join(
+                            "%08X(%s)" % (k, tmap.get(k, "?")) for k in t.keywords))
+                    for inc in t.includes:
+                        print("           include: mod=%08X(%s) ap=%d optional=%d dontuseall=%d"
+                              % (inc.mod, tmap.get(inc.mod, "?"), inc.attach_point_index,
+                                 inc.optional, inc.dont_use_all))
+        elif a.ecmd == "header":
+            from fo4tools import espwrite as W
+            buf = open(a.plugin, "rb").read()
+            h = W.parse_record_header(buf, a.offset)
+            print("sig          %s" % h["sig"].decode("latin1"))
+            print("form id      %08X" % h["fid"])
+            print("flags        %08X%s" % (h["flags"], "  (compressed)" if h["compressed"] else ""))
+            print("size         %d" % h["size"])
+            print("vc           %d" % h["vc"])
+            print("form version %d" % h["form_version"])
+            print("unknown      %d" % h["unknown"])
+            print("payload @    %d" % h["payload_off"])
+        elif a.ecmd == "rec":
+            fid = int(a.fid, 16)
+            buf, recs = espread.load(a.plugin)
+            types = {r.fid: r.type for r in recs[1:]}
+            found = False
+            for r in recs[1:]:
+                if r.fid != fid:
+                    continue
+                found = True
+                print("%s %08X  edid=%s  flags=%08X  size=%d"
+                      % (r.type, r.fid, r.edid or "-", r.flags, len(r.data)))
+                for sig, payload in espread.subrecords(r.data):
+                    shown = payload[:a.max]
+                    txt = ""
+                    if not a.hex and shown and all(32 <= c < 127 or c == 0 for c in shown):
+                        txt = "  \"%s\"" % shown.split(b"\x00")[0].decode("latin1")
+                    print("  %-5s %4d  %s%s" % (sig, len(payload), shown.hex(), txt))
+                    # resolve leading FormIDs to record types
+                    if len(payload) >= 4 and len(payload) % 4 == 0 and len(payload) <= 32:
+                        refs = [int.from_bytes(payload[i:i + 4], "little")
+                                for i in range(0, len(payload), 4)]
+                        if any(f in types for f in refs):
+                            print("        -> %s" % ", ".join(
+                                "%08X(%s)" % (f, types.get(f, "?")) for f in refs))
+            if not found:
+                print("no record %08X in %s" % (fid, a.plugin))
+        elif a.ecmd == "set-template":
+            from fo4tools import espwrite as W
+            from fo4tools import objecttemplate as OT
+            fid = int(a.fid, 16)
+            buf, recs = espread.load(a.plugin)
+            hdr = recs[0]
+            out = bytearray(W.render_record(
+                hdr.type, 0, espread.subrecords(hdr.data), flags=hdr.flags,
+                form_version=0))
+            order, groups = [], {}
+            hit = False
+            for r in recs[1:]:
+                key = r.group if r.group is not None else r.type
+                if key not in groups:
+                    groups[key] = []
+                    order.append(key)
+                groups[key].append(r)
+            for key in order:
+                kids = []
+                for r in groups[key]:
+                    h = W.parse_record_header(buf, r.off)
+                    subs = [(s, bytes(p)) for s, p in espread.subrecords(r.data)]
+                    if r.fid == fid:
+                        hit = True
+                        subs = [(s, p) for s, p in subs
+                                if s not in ("OBTE", "OBTS", "STOP")]
+                        if not a.drop:
+                            tmpl = OT.ObjectTemplate(
+                                level_min=0, level_max=0, addon_index=-1, default=1,
+                                includes=[int(x, 16) for x in a.includes])
+                            at = [i for i, (s, _) in enumerate(subs) if s == "APPR"]
+                            pos = (at[-1] + 1) if at else len(subs)
+                            subs[pos:pos] = [
+                                ("OBTE", __import__("struct").pack("<I", 1)),
+                                ("OBTS", OT.build_obts(tmpl)),
+                                ("STOP", b""),
+                            ]
+                    kids.append(W.render_record(
+                        r.type, r.fid, subs, flags=r.flags,
+                        form_version=h["form_version"], vc=h["vc"],
+                        unknown=h["unknown"], compress=h["compressed"]))
+                out += W.render_group(key, kids)
+            if not hit:
+                print("no record %08X in %s" % (fid, a.plugin))
+                return 2
+            open(a.out, "wb").write(bytes(out))
+            print("wrote %s (%d bytes)" % (a.out, len(out)))
+            print("  %08X: %s" % (fid, "template removed" if a.drop
+                                   else "defaults -> " + ", ".join(a.includes)))
+        elif a.ecmd == "copy":
+            from fo4tools import espwrite as W
+            buf, recs = espread.load(a.plugin)
+            hdr = recs[0]
+            out = bytearray(W.render_record(
+                hdr.type, 0, espread.subrecords(hdr.data), flags=hdr.flags,
+                form_version=0))
+            order = []
+            groups = {}
+            for r in recs[1:]:
+                key = r.group if r.group is not None else r.type
+                if key not in groups:
+                    groups[key] = []
+                    order.append(key)
+                groups[key].append(r)
+            for key in order:
+                kids = []
+                for r in groups[key]:
+                    h = W.parse_record_header(buf, r.off)
+                    kids.append(W.render_record(
+                        r.type, r.fid, espread.subrecords(r.data), flags=r.flags,
+                        form_version=h["form_version"], vc=h["vc"],
+                        unknown=h["unknown"], compress=h["compressed"]))
+                out += W.render_group(key, kids)
+            open(a.out, "wb").write(bytes(out))
+            same = bytes(out) == buf
+            print("wrote %s (%d bytes) — %s"
+                  % (a.out, len(out),
+                     "BYTE-EXACT" if same else "DIFFERS from source"))
+            if not same and not a.nested:
+                print("  (nested child groups not rebuilt; try --nested)")
     elif a.cmd == "order":
         from fo4tools import loadorder
         loadorder.audit(a.plugins, a.data)

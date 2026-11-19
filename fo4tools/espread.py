@@ -3,6 +3,15 @@
 import struct, zlib, sys, collections
 class Rec:
     __slots__=('type','flags','fid','data','off','size','group')
+    @property
+    def edid(self):
+        """Editor ID as str, or None (parses subrecords each call; cache if hot)."""
+        for t,d in subrecords(self.data):
+            if t=='EDID':
+                return d.split(b'\0')[0].decode('latin1')
+        return None
+    def subrecords(self):
+        return subrecords(self.data)
 def subrecords(data):
     i=0; out=[]; xxxx=None
     while i+6<=len(data):

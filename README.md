@@ -186,6 +186,81 @@ List records as `formID TYPE EDID FULL-name`:
 fo4tools esp dump mod.esp --type OMOD --search Flashlight
 ```
 
+**`fo4tools esp template <plugin> [--type LIST] [--search TEXT] [--fid HEX]`**
+
+Decode the object template (`OBTE`/`OBTF`/`OBTS`/`STOP`) on each record: one
+line per template combination showing the level/slot range, the `default`
+marker, keywords, and each include's `OMOD` (with its resolved record type).
+
+```sh
+fo4tools esp template fallout4.esm --fid 0024A401     # a power-armour torso
+fo4tools esp template mod.esp --type ARMO --search helmet
+```
+
+**`fo4tools esp rec <plugin> <fid> [--hex] [--max N]`**
+
+Dump every subrecord of one record: sig, length, payload (hex, with an ASCII
+tail when printable), and — for short payloads — the leading FormIDs resolved to
+record types. This is the workhorse for “what is actually in this record?”.
+
+```sh
+fo4tools esp rec mod.esp 010008A1
+```
+
+**`fo4tools esp set-template <plugin> <out> <fid> [OMOD...] [--drop]`**
+
+Rewrite (or remove with `--drop`) a record's default object template. The
+includes are OMOD form ids for the single `default=1` combination; the
+`OBTE`/`OBTS`/`STOP` triple is emitted after `APPR`. Everything else is copied
+verbatim, so this is the intended way to change “what spawns by default”
+without hand-editing bytes.
+
+```sh
+# as shipped by Redux: visor + helmet material, no flashlight
+fo4tools esp set-template mod.esp out.esp 010008B1 0100081B 010008CF
+# bisect a suspected default:
+fo4tools esp set-template mod.esp only_visor.esp 010008B1 0100081B
+```
+
+**`fo4tools esp header <plugin> <offset>`**
+
+Decode the 24-byte record header at a file offset: signature, form id, flags
+(incl. the `compressed` bit), payload size, version control info, form version,
+and where the payload starts.
+
+**`fo4tools esp copy <plugin> <out> [--nested]`**
+
+Rebuild a plugin through the writer and compare to the source. For plugins with
+single-level top groups (anything produced by `espwrite` / the `build_*`
+scripts) this reproduces the file **byte-for-byte**, which doubles as a writer
+self-check. Deeply nested vanilla masters (WRLD/CELL) are flattened, so the
+result differs; the command says so rather than pretending otherwise.
+
+```sh
+fo4tools esp copy mod.esp /tmp/check.esp      # -> "BYTE-EXACT"
+```
+
+### Writing plugins (library)
+
+`fo4tools.espwrite` is the write-side counterpart to `espread` and is pure
+stdlib:
+
+* `parse_subrecords` / `serialize_subrecords` — subrecord streams, including
+  the `XXXX` escape for payloads over 64 KiB.
+* `render_record` — a full 24-byte-header record, uncompressed or zlib-
+  compressed (`vc` / `form_version` / `unknown` are explicit fields).
+* `render_group` / `render_tes4` — GRUP and TES4 header authoring (masters,
+  ESL/ESM/localised flags, `HEDR`).
+* `Record`, `Group`, `Plugin` — small mutable objects (`set`/`remove`/`get` on
+  subrecords, `to_bytes()`, `write()`).
+
+Fidelity is tested, not assumed: `python3 -m fo4tools.test_espwrite FILE`
+checks every record's subrecord round-trip and header re-render. Against
+`Fallout4.esm` that is **1,549,276 records, 0 failures** (1,492,877
+uncompressed records re-render byte-identically, 56,399 compressed ones
+decompress to identical payloads). `python3 -m fo4tools.test_objecttemplate`
+likewise round-trips all 2,430 `OBTS` records.
+
 ### order — load order
 
 **`fo4tools order audit [--plugins FILE] [--data DIR]`**
@@ -236,7 +311,9 @@ the NiNode hierarchy with transforms, and texture paths. Aimed at the weapon
 * **ba2 verification** — the GNRL writer's hash scheme was verified against
   the vanilla `fallout4 - animations.ba2` (2000/2000 matches); the DX10
   writer round-trips every texture byte-for-byte against a working archive.
-* **esp is read-only** — no record writing.
+* **esp is read-only for the CLI** — `esp info/dump/template/header` inspect;
+  `esp copy` writes a rebuilt plugin. Full record authoring is available as a
+  library (`fo4tools.espwrite`), not as a CLI editing language.
 
 ## Layout
 
@@ -251,6 +328,10 @@ fo4tools/
   ba2.py              GNRL archives
   dx10.py             DX10 texture archives (DDS <-> chunks)
   espread.py          plugin record walker
+  espwrite.py         plugin writer (subrecords, records, groups, TES4)
+  objecttemplate.py   OBTE/OBTS object-template decoder + builder
+  test_espwrite.py    writer self-test (round-trip vs any plugin)
+  test_objecttemplate.py  OBTS round-trip self-test
   loadorder.py        load-order auditor
   animtext.py         AnimTextData formats
   clipinfo.py         behaviour clip info format
