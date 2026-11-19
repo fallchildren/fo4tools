@@ -33,14 +33,16 @@ def read(path):
     if fmt != 0x4C524E47:  # 'GNRL'
         raise SystemExit("not a GNRL BA2 (DX10 textures? use dx10 module)")
     num, name_table_offset = struct.unpack("<IQ", hdr[12:24])
-    table = f.read(24, REC.size * num)
+    f.seek(24)
+    table = f.read(REC.size * num)
     entries = []
     for i in range(num):
         h, ext, dh, flags, off, _pad, packed, unpacked = REC.unpack_from(table, i * REC.size)
         entries.append({"hash": h, "ext": ext.rstrip(b"\x00").decode("latin-1"),
                         "offset": off, "size": packed, "unpacked": unpacked, "name": None})
     start = 24 + name_table_offset
-    names = f.read(start, size - start).split(b"\x00")
+    f.seek(start)
+    names = f.read(size - start).split(b"\x00")
     names = [n for n in names if n]
     for e, n in zip(entries, names):
         txt = n.decode("latin-1").replace("\\", "/")
