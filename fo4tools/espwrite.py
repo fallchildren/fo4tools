@@ -149,11 +149,14 @@ def render_record(sig, fid, subrecords, flags=0, form_version=131, vc=0,
     if compress:
         flags |= 0x00040000
         body = zlib.compress(payload, compress_level)
-        # xEdit layout: size = payload+4, vc kept @16, formVersion @20,
-        # compressedSize @24, zlib stream @28.
-        return (sig + struct.pack("<III", len(payload) + 4, flags, fid)
+        # Real layout (checked against Fallout4.esm): the data is
+        #   u32 DECOMPRESSED length, then the zlib stream,
+        # and the header's dataSize is 4 + len(stream).  (Earlier versions wrote the
+        # compressed length into the u32 and decompressed+4 into dataSize, which
+        # corrupts every group that follows the record.)
+        return (sig + struct.pack("<III", len(body) + 4, flags, fid)
                 + struct.pack("<IHH", vc, form_version, unknown)
-                + struct.pack("<I", len(body)) + body)
+                + struct.pack("<I", len(payload)) + body)
 
     flags &= ~0x00040000
     return (sig + struct.pack("<III", len(payload), flags, fid)
@@ -169,16 +172,18 @@ def parse_record_header(buf, off=0):
     form_version, unknown = struct.unpack_from("<HH", buf, off + 20)
     compressed = bool(flags & 0x00040000)
     payload_off = off + 24
+    total = 24 + size
     if compressed:
-        # size counts the 4-byte compressedSize prefix; stream starts at 24
-        csize = struct.unpack_from("<I", buf, off + 20)[0]
-        size = struct.unpack_from("<I", buf, off + 4)[0] - 4
+        # dataSize = 4 (decompressed-length prefix) + zlib stream; ``size`` is the stream
+        # length, ``total`` is the whole record on disk.
+        total = 24 + size
+        size = size - 4
         payload_off = off + 24
     return {
         "sig": sig, "size": size, "flags": flags, "fid": fid,
         "vc": vc, "form_version": form_version, "unknown": unknown,
         "compressed": compressed, "payload_off": payload_off,
-        "total": 24 + size,
+        "total": total,
     }
 
 

@@ -18,6 +18,7 @@ Fallout4.esm if present.  Exits non-zero on failure; prints "skip" (exit 0) for
 a plugin that is not found so it is safe in a generic test runner.
 """
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,13 +74,18 @@ def check_plugin(path):
                 # zlib stream bytes can differ by encoder; require semantic match
                 try:
                     import zlib
-                    cs = espwrite.parse_record_header(rendered_c, 0)["size"]
-                    body = rendered_c[28:28 + cs]
-                    if zlib.decompress(body) == r.data:
+                    # the on-disk layout, checked strictly: header dataSize == 4 + stream
+                    # length, the u32 prefix is the DECOMPRESSED length, and the record
+                    # ends exactly where the next one starts.
+                    data_size = struct.unpack_from("<I", rendered_c, 4)[0]
+                    prefix = struct.unpack_from("<I", rendered_c, 24)[0]
+                    stream = rendered_c[28:24 + data_size]
+                    if (len(rendered_c) == 24 + data_size and prefix == len(r.data)
+                            and zlib.decompress(stream) == r.data):
                         comp_ok += 1
                     else:
                         comp_bad += 1
-                        failures.append("%08X compressed payload mismatch" % r.fid)
+                        failures.append("%08X compressed layout/payload mismatch" % r.fid)
                 except Exception as e:
                     comp_bad += 1
                     failures.append("%08X compressed re-render: %s" % (r.fid, e))
