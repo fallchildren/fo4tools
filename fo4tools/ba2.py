@@ -6,7 +6,7 @@ name / lowercase backslash directory.
 """
 import struct, os, re, zlib
 
-REC = struct.Struct("<I4sIIQIII")  # hash, ext, dirHash, flags, offset, PAD, packed, unpacked
+REC = struct.Struct("<I4sIIQIII")  # hash, ext, dirHash, flags, offset, packed, unpacked, sentinel
 
 _TAB = []
 for i in range(256):
@@ -37,9 +37,10 @@ def read(path):
     table = f.read(REC.size * num)
     entries = []
     for i in range(num):
-        h, ext, dh, flags, off, _pad, packed, unpacked = REC.unpack_from(table, i * REC.size)
+        h, ext, dh, flags, off, packed, unpacked, _sentinel = REC.unpack_from(table, i * REC.size)
         entries.append({"hash": h, "ext": ext.rstrip(b"\x00").decode("latin-1"),
-                        "offset": off, "size": packed, "unpacked": unpacked, "name": None})
+                        "offset": off, "size": packed or unpacked,
+                        "packed": packed, "unpacked": unpacked, "name": None})
     start = name_table_offset
     f.seek(start)
     rest = f.read(size - start)
@@ -52,7 +53,8 @@ def read(path):
         p += ln
     for e, n in zip(entries, names):
         e["name"] = n
-    entries[0]["_f"] = f  # keep the handle for extraction
+    if entries:
+        entries[0]["_f"] = f  # keep the handle for extraction
     return entries, f
 
 def list_names(path):
@@ -67,11 +69,12 @@ def extract_file(path, want, out_dir):
         if want.lower() in (e["name"] or "").lower():
             f.seek(e["offset"])
             data = f.read(e["size"])
-            if e["size"] != e["unpacked"]:
+            if e["packed"]:
                 data = zlib.decompress(data)
             dst = os.path.join(out_dir, e["name"].replace("/", os.sep))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            open(dst, "wb").write(data)
+            with open(dst, "wb") as out:
+                out.write(data)
             f.close()
             return e["name"]
     f.close()
@@ -85,11 +88,12 @@ def extract_all(path, outdir, want=None):
             continue
         f.seek(e["offset"])
         data = f.read(e["size"])
-        if e["size"] != e["unpacked"]:
+        if e["packed"]:
             data = zlib.decompress(data)
         dst = os.path.join(outdir, e["name"].replace("/", os.sep))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        open(dst, "wb").write(data)
+        with open(dst, "wb") as out:
+            out.write(data)
         n += 1
     f.close()
     return n
@@ -112,5 +116,6 @@ def write_ba2(path, files):
         blob += data
     nto = off + len(blob)
     names = b''.join(struct.pack('<H', len(nm.encode('latin1'))) + nm.encode('latin1') for nm, *_ in ents)
-    open(path, 'wb').write(struct.pack('<4sI4sIQ', b'BTDX', 1, b'GNRL', n, nto) + recs + blob + names)
+    with open(path, 'wb') as out:
+        out.write(struct.pack('<4sI4sIQ', b'BTDX', 1, b'GNRL', n, nto) + recs + blob + names)
     return n
